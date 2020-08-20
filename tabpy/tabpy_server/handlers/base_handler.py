@@ -8,6 +8,7 @@ from tabpy.tabpy_server.app.SettingsParameters import SettingsParameters
 from tabpy.tabpy_server.handlers.util import hash_password
 from tabpy.tabpy_server.handlers.util import AuthErrorStates
 import uuid
+import requests
 
 
 STAGING_THREAD = concurrent.futures.ThreadPoolExecutor(max_workers=3)
@@ -124,6 +125,7 @@ class BaseHandler(tornado.web.RequestHandler):
         self.port = self.settings[SettingsParameters.Port]
         self.python_service = app.python_service
         self.credentials = app.credentials
+        self.token = None
         self.username = None
         self.password = None
         self.eval_timeout = self.settings[SettingsParameters.EvaluateTimeout]
@@ -226,6 +228,11 @@ class BaseHandler(tornado.web.RequestHandler):
         methods = auth_feature["methods"]
         if "basic-auth" in auth_feature["methods"]:
             return True, "basic-auth"
+
+        methods = auth_feature["methods"]
+        if "oidc" in auth_feature["methods"]:
+            return True, "oidc"
+
         # Add new methods here...
 
         # No known methods were found
@@ -278,6 +285,34 @@ class BaseHandler(tornado.web.RequestHandler):
         self.password = login_pwd[1]
         return True
 
+    def _get_oidc_credentials(self) -> bool:
+        """
+        Find credentials for oidc authentication method.
+
+        Returns
+        -------
+        bool
+            True if valid credentials were found.
+            False otherwise.
+        """
+        self.logger.log(
+            logging.DEBUG, "Checking request headers for authentication data"
+        )
+        if "Authorization" not in self.request.headers:
+            self.logger.log(logging.INFO, "Authorization header not found")
+            return False
+
+        auth_header = self.request.headers["Authorization"]
+        auth_header_list = auth_header.split(" ")
+        if len(auth_header_list) != 2 or auth_header_list[0] != "Bearer":
+            self.logger.log(
+                logging.ERROR, f'Invalid authentication method "{auth_header}"'
+            )
+            return False
+
+        self.token = auth_header_list[1]
+        return True
+
     def _get_credentials(self, method) -> bool:
         """
         Find credentials for specified authentication method. Credentials if
@@ -296,6 +331,9 @@ class BaseHandler(tornado.web.RequestHandler):
         """
         if method == "basic-auth":
             return self._get_basic_auth_credentials()
+
+        if method == "oidc":
+            return self._get_oidc_credentials()
         # Add new methods here...
 
         # No known methods were found
@@ -334,6 +372,50 @@ class BaseHandler(tornado.web.RequestHandler):
 
         return True
 
+    def _validate_oidc_credentials(self) -> bool:
+        """
+        Validates username is active with OIDC identity provider.
+
+        Returns
+        -------
+        bool
+            True if credential is active.
+        """
+        id_token = self.token
+
+        session = requests.Session()
+        session.headers['content-type'] = f"application/x-www-form-urlencoded"
+        oidc_client_id = self.settings[SettingsParameters.OidcClientId]
+        oidc_client_secret = self.settings[SettingsParameters.OidcClientSecret]
+        client_auth = f"{oidc_client_id}:{oidc_client_secret}"
+        encoded = base64.b64encode(client_auth.encode("utf-8")).decode("utf-8")
+        session.headers['Authorization'] = f"Basic {encoded}"
+        oidc_introspect_url = self.settings[SettingsParameters.OidcIntrospectUrl]
+        response = session.post(url=oidc_introspect_url, data=f"token={id_token}")
+
+        self.logger.log(
+            logging.DEBUG, f"OIDC response {response.text}"
+        )
+        try:
+            request_data = json.loads(response.text)
+        except BaseException as ex:
+            self.logger.log(logging.ERROR, f'Failed to decode OIDC response')
+            return False
+
+        if request_data['active'] == None:
+            self.logger.log(
+                logging.ERROR, f'Unexpected OIDC response'
+            )
+            return False
+
+        if request_data['active'] != True:
+            self.logger.log(
+                logging.ERROR, f'Token inactive'
+            )
+            return False
+
+        return True
+
     def _validate_credentials(self, method) -> bool:
         """
         Validates credentials according to specified methods if they
@@ -352,6 +434,9 @@ class BaseHandler(tornado.web.RequestHandler):
         """
         if method == "basic-auth":
             return self._validate_basic_auth_credentials()
+
+        if method == "oidc":
+            return self._validate_oidc_credentials()
         # Add new methods here...
 
         # No known methods were found
@@ -432,7 +517,7 @@ class BaseHandler(tornado.web.RequestHandler):
             self.error_out(
                 401,
                 info="Unauthorized request.",
-                log_message="Invalid credentials provided.",
+                log_message="Invalid credentials or token provided.",
             )
         else:
             self.logger.log(logging.ERROR, "Failing with 400 for Bad Request")

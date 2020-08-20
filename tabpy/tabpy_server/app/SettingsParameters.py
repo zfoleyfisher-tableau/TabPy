@@ -15,3 +15,6 @@ class SettingsParameters:
     StaticPath = "static_path"
     MaxRequestSizeInMb = "max_request_size_in_mb"
     EvaluateTimeout = "evaluate_timeout"
+    OidcClientId = "oidc_client_id"
+    OidcClientSecret = "oidc_client_secret"
+    OidcIntrospectUrl = "oidc_introspect_url"

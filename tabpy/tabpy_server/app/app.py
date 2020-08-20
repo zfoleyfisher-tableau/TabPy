@@ -281,6 +281,9 @@ class TabPyApp:
              "false", None),
             (SettingsParameters.MaxRequestSizeInMb, ConfigParameters.TABPY_MAX_REQUEST_SIZE_MB,
              100, None),
+            (SettingsParameters.OidcClientId, ConfigParameters.TABPY_OIDC_CLIENT_ID, None, None),
+            (SettingsParameters.OidcClientSecret, ConfigParameters.TABPY_OIDC_CLIENT_SECRET, None, None),
+            (SettingsParameters.OidcIntrospectUrl, ConfigParameters.TABPY_OIDC_INTROSPECT_URL, None, None),
         ]
 
         for setting, parameter, default_val, parse_function in settings_parameters:
@@ -414,6 +417,11 @@ class TabPyApp:
             features["authentication"] = {
                 "required": True,
                 "methods": {"basic-auth": {}},
+            }
+        elif SettingsParameters.OidcIntrospectUrl in self.settings:
+            features["authentication"] = {
+                "required": True,
+                "methods": {"oidc": {}},
             }
 
         return features
